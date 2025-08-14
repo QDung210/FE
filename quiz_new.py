@@ -523,94 +523,120 @@ def main():
         st.session_state.show_answer = False
     if 'show_review' not in st.session_state:
         st.session_state.show_review = False
+    if 'df_data' not in st.session_state:
+        st.session_state.df_data = None
+    if 'file_loaded' not in st.session_state:
+        st.session_state.file_loaded = False
     
     # Sidebar cho cấu hình
     with st.sidebar:
         st.header("⚙️ Cài đặt")
         
-        # Tabs cho các phương thức tải file
-        tab1, tab2 = st.tabs(["📁 Upload File", "🔗 Google Drive"])
+        # Hiển thị trạng thái file đã load
+        if st.session_state.file_loaded:
+            st.info(f"📄 Đã tải file với {len(st.session_state.df_data)} câu hỏi")
+            if st.button("🗑️ Xóa file và tải file mới", type="secondary"):
+                st.session_state.file_loaded = False
+                st.session_state.df_data = None
+                st.session_state.quiz_started = False
+                st.session_state.quiz_completed = False
+                st.session_state.current_question = 0
+                st.session_state.user_answers = {}
+                st.session_state.selected_questions = None
+                st.rerun()
         
-        with tab1:
-            # Upload file Excel hoặc TXT
-            uploaded_file = st.file_uploader(
-                "Chọn file chứa câu hỏi",
-                type=['xlsx', 'xls', 'txt'],
-                help="Hỗ trợ:\n• File Excel (7 cột): Câu hỏi, A, B, C, D, E, Đáp án đúng\n• File TXT: Mỗi câu một dòng, các phần cách nhau bằng //"
-            )
-        
-        with tab2:
-            # Nhập link Google Drive
-            gdrive_link = st.text_input(
-                "Nhập link Google Drive",
-                placeholder="https://drive.google.com/file/d/...",
-                help="Dán link chia sẻ Google Drive của file Excel hoặc TXT\nLưu ý: File phải được chia sẻ công khai hoặc cho phép mọi người xem"
-            )
+        # Tabs cho các phương thức tải file (chỉ hiển thị khi chưa load file)
+        uploaded_file = None
+        if not st.session_state.file_loaded:
+            tab1, tab2 = st.tabs(["📁 Upload File", "🔗 Google Drive"])
             
-            # Button để tải file từ Google Drive
-            load_gdrive = st.button("📥 Tải file từ Google Drive", type="primary")
+            with tab1:
+                # Upload file Excel hoặc TXT
+                uploaded_file = st.file_uploader(
+                    "Chọn file chứa câu hỏi",
+                    type=['xlsx', 'xls', 'txt'],
+                    help="Hỗ trợ:\n• File Excel (7 cột): Câu hỏi, A, B, C, D, E, Đáp án đúng\n• File TXT: Mỗi câu một dòng, các phần cách nhau bằng //"
+                )
             
-            if load_gdrive and gdrive_link:
-                with st.spinner("Đang tải file từ Google Drive..."):
-                    gdrive_file = download_from_gdrive(gdrive_link)
-                    if gdrive_file:
-                        # Xác định loại file từ link
-                        if gdrive_link.lower().find('.xlsx') != -1 or gdrive_link.lower().find('.xls') != -1:
-                            file_extension = 'xlsx'
-                        elif gdrive_link.lower().find('.txt') != -1:
-                            file_extension = 'txt'
-                        else:
-                            # Thử đoán dựa trên content
-                            try:
-                                # Thử đọc như Excel trước
-                                pd.read_excel(gdrive_file)
+            with tab2:
+                # Nhập link Google Drive
+                gdrive_link = st.text_input(
+                    "Nhập link Google Drive",
+                    placeholder="https://drive.google.com/file/d/...",
+                    help="Dán link chia sẻ Google Drive của file Excel hoặc TXT\nLưu ý: File phải được chia sẻ công khai hoặc cho phép mọi người xem"
+                )
+                
+                # Button để tải file từ Google Drive
+                load_gdrive = st.button("📥 Tải file từ Google Drive", type="primary")
+                
+                if load_gdrive and gdrive_link:
+                    with st.spinner("Đang tải file từ Google Drive..."):
+                        gdrive_file = download_from_gdrive(gdrive_link)
+                        if gdrive_file:
+                            # Xác định loại file từ link
+                            if gdrive_link.lower().find('.xlsx') != -1 or gdrive_link.lower().find('.xls') != -1:
                                 file_extension = 'xlsx'
-                            except:
+                            elif gdrive_link.lower().find('.txt') != -1:
                                 file_extension = 'txt'
-                        
-                        # Gán file đã tải vào uploaded_file để xử lý chung
-                        uploaded_file = gdrive_file
-                        st.success("✅ Tải file thành công từ Google Drive!")
-                    else:
-                        uploaded_file = None
-            else:
-                uploaded_file = None
-        
-        # Xử lý file (dù từ upload hay Google Drive)
-        if uploaded_file is not None:
-            # Xác định loại file và đọc tương ứng
-            if 'file_extension' not in locals():
-                if hasattr(uploaded_file, 'name'):
-                    file_extension = uploaded_file.name.split('.')[-1].lower()
+                            else:
+                                # Thử đoán dựa trên content
+                                try:
+                                    # Thử đọc như Excel trước
+                                    pd.read_excel(gdrive_file)
+                                    file_extension = 'xlsx'
+                                except:
+                                    file_extension = 'txt'
+                            
+                            # Xử lý file ngay và lưu vào session_state
+                            if file_extension in ['xlsx', 'xls']:
+                                df = load_excel_file(gdrive_file)
+                            elif file_extension == 'txt':
+                                df = load_txt_file(gdrive_file)
+                            else:
+                                st.error("Định dạng file không được hỗ trợ")
+                                df = None
+                            
+                            if df is not None:
+                                st.session_state.df_data = df
+                                st.session_state.file_loaded = True
+                                st.success("✅ Tải file thành công từ Google Drive!")
+            
+            # Xử lý file upload thông thường (từ tab 1)  
+            if uploaded_file is not None:
+                # Xác định loại file và đọc tương ứng
+                file_extension = uploaded_file.name.split('.')[-1].lower()
+                
+                if file_extension in ['xlsx', 'xls']:
+                    df = load_excel_file(uploaded_file)
+                elif file_extension == 'txt':
+                    df = load_txt_file(uploaded_file)
                 else:
-                    file_extension = 'xlsx'  # Mặc định
+                    st.error("Định dạng file không được hỗ trợ")
+                    df = None
+                
+                if df is not None:
+                    st.session_state.df_data = df
+                    st.session_state.file_loaded = True        # Sử dụng dữ liệu từ session_state
+        if st.session_state.file_loaded and st.session_state.df_data is not None:
+            df = st.session_state.df_data
             
-            if file_extension in ['xlsx', 'xls']:
-                df = load_excel_file(uploaded_file)
-            elif file_extension == 'txt':
-                df = load_txt_file(uploaded_file)
-            else:
-                st.error("Định dạng file không được hỗ trợ")
-                df = None
+            st.success(f"✅ File hợp lệ: {len(df)} câu hỏi")
             
-            if df is not None:
-                st.success(f"✅ File hợp lệ: {len(df)} câu hỏi")
-                
-                # Kiểm tra lỗi dữ liệu
-                errors, warnings = validate_questions_data(df)
-                
-                if errors:
-                    st.error("❌ Phát hiện lỗi trong dữ liệu:")
-                    with st.expander("🔍 Chi tiết lỗi", expanded=True):
-                        for error in errors:
-                            st.markdown(f"• {error}")
-                    st.markdown("**⚠️ Vui lòng sửa lỗi trước khi tiếp tục.**")
-                    return  # Dừng xử lý nếu có lỗi
-                
-                if warnings:
-                    st.warning("⚠️ Cảnh báo và gợi ý:")
-                    with st.expander("📋 Chi tiết cảnh báo", expanded=True):
-                        for warning in warnings:
+            # Kiểm tra lỗi dữ liệu
+            errors, warnings = validate_questions_data(df)
+            
+            if errors:
+                st.error("❌ Phát hiện lỗi trong dữ liệu:")
+                with st.expander("🔍 Chi tiết lỗi", expanded=True):
+                    for error in errors:
+                        st.markdown(f"• {error}")
+                st.markdown("**⚠️ Vui lòng sửa lỗi trước khi tiếp tục.**")
+                return  # Dừng xử lý nếu có lỗi
+            
+            if warnings:
+                st.warning("⚠️ Cảnh báo và gợi ý:")
+                with st.expander("📋 Chi tiết cảnh báo", expanded=True):
+                    for warning in warnings:
                             if "nhảy số bất thường" in warning.lower():
                                 st.markdown(f"🚨 **{warning}**")
                             elif "thiếu câu số" in warning.lower():
