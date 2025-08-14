@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import random
+import requests
+import io
 
 # Cấu hình trang
 st.set_page_config(page_title="Quiz Trắc Nghiệm", layout="wide")
@@ -47,7 +49,7 @@ st.markdown("""
     margin-left: 15px;
 }
 .question-text {
-    font-size: 32px;
+    font-size: 25px;
     font-weight: bold;
     color: #2c3e50;
     margin-bottom: 25px;
@@ -172,6 +174,46 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def convert_gdrive_link(gdrive_link):
+    """Chuyển đổi Google Drive link thành direct download link"""
+    try:
+        if "drive.google.com" in gdrive_link:
+            # Lấy file ID từ link Google Drive
+            if "/file/d/" in gdrive_link:
+                file_id = gdrive_link.split("/file/d/")[1].split("/")[0]
+            elif "id=" in gdrive_link:
+                file_id = gdrive_link.split("id=")[1].split("&")[0]
+            else:
+                return None
+            
+            # Tạo direct download link
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
+        return None
+    except Exception as e:
+        st.error(f"Lỗi xử lý link Google Drive: {e}")
+        return None
+
+def download_from_gdrive(gdrive_link):
+    """Tải file từ Google Drive và trả về file object"""
+    try:
+        download_link = convert_gdrive_link(gdrive_link)
+        if not download_link:
+            st.error("Link Google Drive không hợp lệ")
+            return None
+        
+        # Tải file
+        response = requests.get(download_link)
+        if response.status_code == 200:
+            # Tạo file object từ content
+            file_content = io.BytesIO(response.content)
+            return file_content
+        else:
+            st.error(f"Không thể tải file từ Google Drive. Status code: {response.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"Lỗi tải file từ Google Drive: {e}")
+        return None
+
 def load_excel_file(uploaded_file):
     """Đọc file Excel và trả về DataFrame"""
     try:
@@ -191,8 +233,15 @@ def load_excel_file(uploaded_file):
 def load_txt_file(uploaded_file):
     """Đọc file TXT và chuyển đổi thành DataFrame"""
     try:
-        # Đọc nội dung file
-        content = uploaded_file.read().decode('utf-8')
+        # Đọc nội dung file - xử lý cả file upload và file từ Google Drive
+        if hasattr(uploaded_file, 'read'):
+            if hasattr(uploaded_file, 'decode'):
+                content = uploaded_file.decode('utf-8')
+            else:
+                content = uploaded_file.read().decode('utf-8')
+        else:
+            content = str(uploaded_file)
+        
         lines = content.strip().split('\n')
         
         data = []
@@ -479,16 +528,62 @@ def main():
     with st.sidebar:
         st.header("⚙️ Cài đặt")
         
-        # Upload file Excel hoặc TXT
-        uploaded_file = st.file_uploader(
-            "Chọn file chứa câu hỏi",
-            type=['xlsx', 'xls', 'txt'],
-            help="Hỗ trợ:\n• File Excel (7 cột): Câu hỏi, A, B, C, D, E, Đáp án đúng\n• File TXT: Mỗi câu một dòng, các phần cách nhau bằng //"
-        )
+        # Tabs cho các phương thức tải file
+        tab1, tab2 = st.tabs(["📁 Upload File", "🔗 Google Drive"])
         
+        with tab1:
+            # Upload file Excel hoặc TXT
+            uploaded_file = st.file_uploader(
+                "Chọn file chứa câu hỏi",
+                type=['xlsx', 'xls', 'txt'],
+                help="Hỗ trợ:\n• File Excel (7 cột): Câu hỏi, A, B, C, D, E, Đáp án đúng\n• File TXT: Mỗi câu một dòng, các phần cách nhau bằng //"
+            )
+        
+        with tab2:
+            # Nhập link Google Drive
+            gdrive_link = st.text_input(
+                "Nhập link Google Drive",
+                placeholder="https://drive.google.com/file/d/...",
+                help="Dán link chia sẻ Google Drive của file Excel hoặc TXT\nLưu ý: File phải được chia sẻ công khai hoặc cho phép mọi người xem"
+            )
+            
+            # Button để tải file từ Google Drive
+            load_gdrive = st.button("📥 Tải file từ Google Drive", type="primary")
+            
+            if load_gdrive and gdrive_link:
+                with st.spinner("Đang tải file từ Google Drive..."):
+                    gdrive_file = download_from_gdrive(gdrive_link)
+                    if gdrive_file:
+                        # Xác định loại file từ link
+                        if gdrive_link.lower().find('.xlsx') != -1 or gdrive_link.lower().find('.xls') != -1:
+                            file_extension = 'xlsx'
+                        elif gdrive_link.lower().find('.txt') != -1:
+                            file_extension = 'txt'
+                        else:
+                            # Thử đoán dựa trên content
+                            try:
+                                # Thử đọc như Excel trước
+                                pd.read_excel(gdrive_file)
+                                file_extension = 'xlsx'
+                            except:
+                                file_extension = 'txt'
+                        
+                        # Gán file đã tải vào uploaded_file để xử lý chung
+                        uploaded_file = gdrive_file
+                        st.success("✅ Tải file thành công từ Google Drive!")
+                    else:
+                        uploaded_file = None
+            else:
+                uploaded_file = None
+        
+        # Xử lý file (dù từ upload hay Google Drive)
         if uploaded_file is not None:
             # Xác định loại file và đọc tương ứng
-            file_extension = uploaded_file.name.split('.')[-1].lower()
+            if 'file_extension' not in locals():
+                if hasattr(uploaded_file, 'name'):
+                    file_extension = uploaded_file.name.split('.')[-1].lower()
+                else:
+                    file_extension = 'xlsx'  # Mặc định
             
             if file_extension in ['xlsx', 'xls']:
                 df = load_excel_file(uploaded_file)
